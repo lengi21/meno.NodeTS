@@ -1,4 +1,5 @@
-import { IsIn, IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
+import { IsArray, IsIn, IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
+import { PrintJobType } from '@prisma/client';
 
 export class SavePrinterDto {
   @IsString()
@@ -16,4 +17,9 @@ export class SavePrinterDto {
   @Min(58)
   @Max(80)
   readonly paperWidthMm?: number;
+
+  @IsOptional()
+  @IsArray()
+  @IsIn(Object.values(PrintJobType), { each: true })
+  readonly routes?: PrintJobType[];
 }

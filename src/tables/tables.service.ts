@@ -1,5 +1,5 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
-import { LanguageCode } from '@prisma/client';
+import { LanguageCode, PrintJobType, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service.js';
 import type { AddItemDto } from './dto/add-item.dto.js';
 import type { CloseChequeDto } from './dto/close-cheque.dto.js';
@@ -72,6 +72,15 @@ export class TablesService {
     return this.view(item.chequeId, restaurantId, table, language);
   }
 
+  async updateGuestCount(tableId: string, restaurantId: string, guestCount: number, language: LanguageCode) {
+    const table = await this.prisma.diningTable.findFirst({ where: { id: tableId, isActive: true, hall: { restaurantId } }, include: { hall: true } });
+    if (!table) throw new NotFoundException('Table not found');
+    const cheque = await this.prisma.cheque.findFirst({ where: { tableId, restaurantId, status: { in: ['OPEN', 'READY_TO_CLOSE'] } }, orderBy: { openedAt: 'desc' } });
+    if (!cheque) throw new NotFoundException('Active cheque not found');
+    await this.prisma.cheque.update({ where: { id: cheque.id }, data: { guestCount } });
+    return this.view(cheque.id, restaurantId, table, language);
+  }
+
   async modifyOrderedItem(tableId: string, itemId: string, restaurantId: string, memberId: string, quantity: number, language: LanguageCode) {
     await this.assertPermission(memberId, 'cheque.modify-ordered');
     const table = await this.prisma.diningTable.findFirst({ where: { id: tableId, isActive: true, hall: { restaurantId } }, include: { hall: true } });
@@ -83,7 +92,7 @@ export class TablesService {
     await this.prisma.$transaction(async (transaction) => {
       await transaction.chequeItem.update({ where: { id: item.id }, data: { quantity, status: quantity === 0 ? 'VOIDED' : 'MODIFIED' } });
       await transaction.cheque.update({ where: { id: item.chequeId }, data: { version: { increment: 1 }, status: 'OPEN' } });
-      await transaction.printJob.create({ data: { chequeId: item.chequeId, orderId: item.orderId, type: 'MODIFICATION', payload: { chequeNumber: item.cheque.sequenceNumber, orderId, orderDate: item.order?.createdAt ?? null, modifiedAt: new Date(), language, changes: [{ dish: item.dish.translations[0]?.name ?? item.dishName, previousQuantity, quantity, removed: quantity === 0 }] } } });
+      await this.queuePrintJobs(transaction, restaurantId, 'MODIFICATION', { chequeId: item.chequeId, orderId: item.orderId, payload: { chequeNumber: item.cheque.sequenceNumber, orderId, orderDate: item.order?.createdAt ?? null, modifiedAt: new Date(), language, changes: [{ dish: item.dish.translations[0]?.name ?? item.dishName, previousQuantity, quantity, removed: quantity === 0 }] } });
       await transaction.auditEvent.create({ data: { restaurantId, memberId, action: 'ORDERED_ITEM_MODIFIED', entityType: 'ChequeItem', entityId: item.id, metadata: { chequeId: item.chequeId, orderId, previousQuantity, quantity } } });
     });
     return this.view(item.chequeId, restaurantId, table, language);
@@ -100,7 +109,7 @@ export class TablesService {
       await transaction.chequeItem.updateMany({ where: { id: { in: cheque.items.map((item) => item.id) } }, data: { status: 'VOIDED' } });
       await transaction.cheque.update({ where: { id: cheque.id }, data: { status: 'VOIDED' } });
       if (orderedItems.length) {
-        await transaction.printJob.create({ data: { chequeId: cheque.id, type: 'MODIFICATION', payload: { chequeNumber: cheque.sequenceNumber, language, cancelledAt: new Date(), changes: orderedItems.map((item) => ({ dish: item.dish.translations[0]?.name ?? item.dishName, orderId: item.order ? this.orderId(cheque.sequenceNumber, item.order.sequenceInCheque) : null, orderDate: item.order?.createdAt ?? null, previousQuantity: item.quantity, quantity: 0, removed: true })) } } });
+        await this.queuePrintJobs(transaction, restaurantId, 'MODIFICATION', { chequeId: cheque.id, payload: { chequeNumber: cheque.sequenceNumber, language, cancelledAt: new Date(), changes: orderedItems.map((item) => ({ dish: item.dish.translations[0]?.name ?? item.dishName, orderId: item.order ? this.orderId(cheque.sequenceNumber, item.order.sequenceInCheque) : null, orderDate: item.order?.createdAt ?? null, previousQuantity: item.quantity, quantity: 0, removed: true })) } });
       }
       await transaction.auditEvent.create({ data: { restaurantId, memberId, action: 'CHEQUE_CANCELLED', entityType: 'Cheque', entityId: cheque.id, metadata: { chequeNumber: cheque.sequenceNumber, orderedItemCount: orderedItems.length } } });
     });
@@ -126,9 +135,7 @@ export class TablesService {
       createdOrderNumber = order.sequenceNumber;
       createdOrderId = this.orderId(cheque.sequenceNumber, order.sequenceInCheque);
       await transaction.chequeItem.updateMany({ where: { id: { in: unorderedItems.map((item) => item.id) } }, data: { orderId: order.id, status: 'ORDERED' } });
-      await transaction.printJob.create({
-        data: { chequeId: cheque.id, orderId: order.id, type: 'ORDER', payload: { chequeId: cheque.id, chequeNumber: cheque.sequenceNumber, orderNumber: order.sequenceNumber, orderId: createdOrderId, language, items: unorderedItems.map((item) => ({ name: item.dish.translations[0]?.name ?? item.dishName, quantity: item.quantity, unitPrice: Number(item.unitPrice) })) } },
-      });
+      await this.queuePrintJobs(transaction, restaurantId, 'ORDER', { chequeId: cheque.id, orderId: order.id, payload: { chequeId: cheque.id, chequeNumber: cheque.sequenceNumber, orderNumber: order.sequenceNumber, orderId: createdOrderId, language, items: unorderedItems.map((item) => ({ name: item.dish.translations[0]?.name ?? item.dishName, quantity: item.quantity, unitPrice: Number(item.unitPrice) })) } });
       await transaction.auditEvent.create({ data: { restaurantId, memberId, action: 'ORDER_CREATED', entityType: 'Order', entityId: order.id, metadata: { chequeId: cheque.id, chequeNumber: cheque.sequenceNumber, orderId: createdOrderId, itemCount: unorderedItems.length } } });
     });
     return { ...(await this.view(cheque.id, restaurantId, table, language)), lastQueuedOrderNumber: createdOrderNumber, lastQueuedOrderId: createdOrderId };
@@ -154,11 +161,9 @@ export class TablesService {
         where: { id: cheque.id },
         data: { status: 'READY_TO_CLOSE', advancePrintedAt: new Date(), advanceVersion: cheque.version },
       });
-      await transaction.printJob.create({
-        data: {
-          chequeId: cheque.id,
-          type: 'ADVANCE_CHEQUE',
-          payload: {
+      await this.queuePrintJobs(transaction, restaurantId, 'ADVANCE_CHEQUE', {
+        chequeId: cheque.id,
+        payload: {
             chequeNumber: cheque.sequenceNumber,
             chequeVersion: cheque.version,
             lastOrderId,
@@ -166,7 +171,6 @@ export class TablesService {
             language,
             items: cheque.items.map((item) => ({ name: item.dish.translations[0]?.name ?? item.dishName, quantity: item.quantity, unitPrice: Number(item.unitPrice) })),
             total,
-          },
         },
       });
       await transaction.auditEvent.create({ data: { restaurantId, memberId, action: 'ADVANCE_CHEQUE_QUEUED', entityType: 'Cheque', entityId: cheque.id, metadata: { version: cheque.version, total, lastOrderId } } });
@@ -196,11 +200,9 @@ export class TablesService {
       });
       await transaction.cheque.update({ where: { id: cheque.id }, data: { status: 'CLOSED', closedByMemberId: memberId, closedAt: new Date() } });
       if (dto.printReceipt) {
-        await transaction.printJob.create({
-          data: {
-            chequeId: cheque.id,
-            type: 'CLOSE_CHEQUE',
-            payload: {
+        await this.queuePrintJobs(transaction, restaurantId, 'CLOSE_CHEQUE', {
+          chequeId: cheque.id,
+          payload: {
               chequeNumber: cheque.sequenceNumber,
               tableId,
               paymentMethod: dto.method,
@@ -210,7 +212,6 @@ export class TablesService {
               receivedAmount,
               changeAmount,
               items: cheque.items.map((item) => ({ name: item.dish.translations[0]?.name ?? item.dishName, quantity: item.quantity, unitPrice: Number(item.unitPrice) })),
-            },
           },
         });
       }
@@ -253,6 +254,13 @@ export class TablesService {
 
   private orderId(chequeNumber: number, sequenceInCheque: number): string {
     return `${chequeNumber.toString().padStart(6, '0')}-${sequenceInCheque.toString().padStart(2, '0')}`;
+  }
+
+  /** A receipt type can be routed to several active printers for one restaurant. */
+  private async queuePrintJobs(transaction: Prisma.TransactionClient, restaurantId: string, type: PrintJobType, data: { chequeId?: string; orderId?: string | null; payload: Prisma.InputJsonValue | Record<string, unknown> }) {
+    const routes = await transaction.printerRoute.findMany({ where: { jobType: type, printer: { restaurantId, isActive: true } }, select: { printerId: true } });
+    const printerIds = routes.length ? routes.map((route) => route.printerId) : [null];
+    await transaction.printJob.createMany({ data: printerIds.map((printerId) => ({ chequeId: data.chequeId, orderId: data.orderId ?? null, printerId, type, payload: data.payload as Prisma.InputJsonValue })) });
   }
 
   private async assertPermission(memberId: string, code: string): Promise<void> {

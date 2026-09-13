@@ -8,6 +8,7 @@ import { CloseChequeDto } from './dto/close-cheque.dto.js';
 import { UpdateItemDto } from './dto/update-item.dto.js';
 import { OpenChequeDto } from './dto/open-cheque.dto.js';
 import { ModifyOrderedItemDto } from './dto/modify-ordered-item.dto.js';
+import { UpdateGuestCountDto } from './dto/update-guest-count.dto.js';
 import { TablesService } from './tables.service.js';
 
 @Controller('tables')
@@ -37,6 +38,12 @@ export class TablesController {
   updateItem(@Param('tableId') tableId: string, @Param('itemId') itemId: string, @Query('language') language: string | undefined, @Body() dto: UpdateItemDto, @Req() request: Request & AuthenticatedRequest) {
     const auth = this.user(request);
     return this.tables.updateUnorderedItem(tableId, itemId, auth.restaurantId, dto.quantity, this.language(language));
+  }
+
+  @Patch(':tableId/active/guests')
+  updateGuests(@Param('tableId') tableId: string, @Query('language') language: string | undefined, @Body() dto: UpdateGuestCountDto, @Req() request: Request & AuthenticatedRequest) {
+    const auth = this.user(request);
+    return this.tables.updateGuestCount(tableId, auth.restaurantId, dto.guestCount, this.language(language));
   }
 
   @Patch(':tableId/active/items/:itemId/ordered')

@@ -6,8 +6,9 @@ import { HallsModule } from './halls/halls.module.js';
 import { TablesModule } from './tables/tables.module.js';
 import { PrismaModule } from './prisma/prisma.module.js';
 import { PrintersModule } from './printers/printers.module.js';
+import { DayBalanceModule } from './day-balance/day-balance.module.js';
 
 @Module({
-  imports: [ConfigModule.forRoot({ isGlobal: true }), PrismaModule, HealthModule, AuthModule, HallsModule, TablesModule, PrintersModule],
+  imports: [ConfigModule.forRoot({ isGlobal: true }), PrismaModule, HealthModule, AuthModule, HallsModule, TablesModule, PrintersModule, DayBalanceModule],
 })
 export class AppModule {}
