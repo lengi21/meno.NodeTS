@@ -1,0 +1,5 @@
+-- AlterEnum
+ALTER TYPE "PrintJobType" ADD VALUE 'MODIFICATION';
+
+-- AlterTable
+ALTER TABLE "Cheque" ADD COLUMN     "guestCount" INTEGER NOT NULL DEFAULT 1;
