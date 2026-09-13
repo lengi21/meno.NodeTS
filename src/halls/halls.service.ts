@@ -1,9 +1,10 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service.js';
+import { ChequeCalculationService } from '../tables/cheque-calculation.service.js';
 
 @Injectable()
 export class HallsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly prisma: PrismaService, private readonly calculations: ChequeCalculationService) {}
 
   async listForRestaurant(restaurantId: string) {
     const halls = await this.prisma.hall.findMany({
@@ -25,24 +26,21 @@ export class HallsService {
       },
     });
 
-    return halls.map((hall) => ({
+    return Promise.all(halls.map(async (hall) => ({
       id: hall.id,
       name: hall.name,
       sortOrder: hall.sortOrder,
-      tables: hall.tables.map((table) => {
+      tables: await Promise.all(hall.tables.map(async (table) => {
         const cheque = table.cheques[0];
-        const total = cheque?.items.reduce(
-          (sum, item) => sum + Number(item.unitPrice) * item.quantity,
-          0,
-        ) ?? 0;
+        const calculation = cheque ? await this.calculations.calculate(cheque.id, restaurantId) : { subtotal: 0, serviceFee: 0, discount: 0, total: 0 };
         return {
           id: table.id,
           name: table.name,
           status: !cheque ? 'AVAILABLE' : cheque.status === 'READY_TO_CLOSE' ? 'ADVANCE_PRINTED' : 'OCCUPIED',
           chequeNumber: cheque?.sequenceNumber ?? null,
-          total,
+          ...calculation,
         };
-      }),
-    }));
+      })),
+    })));
   }
 }

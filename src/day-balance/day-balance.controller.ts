@@ -1,4 +1,4 @@
-import { Controller, ForbiddenException, Get, Req, UseGuards } from '@nestjs/common';
+import { Controller, ForbiddenException, Get, Post, Req, UseGuards } from '@nestjs/common';
 import type { Request } from 'express';
 import { AccessTokenGuard } from '../auth/access-token.guard.js';
 import type { AuthenticatedRequest } from '../auth/auth.types.js';
@@ -13,4 +13,5 @@ export class DayBalanceController {
     if (!auth || auth.kind !== 'pos-user') throw new ForbiddenException('A staff PIN session is required');
     return this.dayBalance.current(auth.restaurantId);
   }
+  @Post('close') close(@Req() request: Request & AuthenticatedRequest) { const auth = request.auth; if (!auth || auth.kind !== 'pos-user' || !auth.memberId) throw new ForbiddenException('A staff PIN session is required'); return this.dayBalance.close(auth.restaurantId, auth.memberId); }
 }
