@@ -3,10 +3,12 @@ import { LanguageCode, PrintJobType, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service.js';
 import type { AddItemDto } from './dto/add-item.dto.js';
 import type { CloseChequeDto } from './dto/close-cheque.dto.js';
+import type { SetDiscountDto } from './dto/set-discount.dto.js';
+import { ChequeCalculationService } from './cheque-calculation.service.js';
 
 @Injectable()
 export class TablesService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly prisma: PrismaService, private readonly calculations: ChequeCalculationService) {}
 
   async openOrGet(tableId: string, restaurantId: string, memberId: string, language: LanguageCode, guestCount = 1) {
     const table = await this.prisma.diningTable.findFirst({
@@ -78,6 +80,23 @@ export class TablesService {
     const cheque = await this.prisma.cheque.findFirst({ where: { tableId, restaurantId, status: { in: ['OPEN', 'READY_TO_CLOSE'] } }, orderBy: { openedAt: 'desc' } });
     if (!cheque) throw new NotFoundException('Active cheque not found');
     await this.prisma.cheque.update({ where: { id: cheque.id }, data: { guestCount } });
+    return this.view(cheque.id, restaurantId, table, language);
+  }
+
+  async setDiscount(tableId: string, restaurantId: string, memberId: string, dto: SetDiscountDto, language: LanguageCode) {
+    await this.assertPermission(memberId, 'cheque.discount');
+    const table = await this.prisma.diningTable.findFirst({ where: { id: tableId, isActive: true, hall: { restaurantId } }, include: { hall: true } });
+    if (!table) throw new NotFoundException('Table not found');
+    const cheque = await this.prisma.cheque.findFirst({ where: { tableId, restaurantId, status: { in: ['OPEN', 'READY_TO_CLOSE'] } }, orderBy: { openedAt: 'desc' } });
+    if (!cheque) throw new NotFoundException('Active cheque not found');
+    const base = await this.calculations.calculate(cheque.id, restaurantId);
+    const amount = dto.type === 'PERCENTAGE' ? Number((base.subtotal * dto.value / 100).toFixed(2)) : Math.min(dto.value, base.subtotal + base.serviceFee);
+    await this.prisma.$transaction(async (transaction) => {
+      await transaction.discount.deleteMany({ where: { chequeId: cheque.id } });
+      if (amount > 0) await transaction.discount.create({ data: { chequeId: cheque.id, type: dto.type, value: dto.value, amount, reason: dto.reason?.trim() || 'Table discount' } });
+      await transaction.cheque.update({ where: { id: cheque.id }, data: { version: { increment: 1 }, status: 'OPEN' } });
+      await transaction.auditEvent.create({ data: { restaurantId, memberId, action: 'CHEQUE_DISCOUNT_UPDATED', entityType: 'Cheque', entityId: cheque.id, metadata: { type: dto.type, value: dto.value, amount } } });
+    });
     return this.view(cheque.id, restaurantId, table, language);
   }
 
@@ -153,7 +172,8 @@ export class TablesService {
     if (!cheque.items.length || cheque.items.some((item) => item.status === 'UNORDERED')) {
       throw new BadRequestException('All cheque items must be ordered before printing an advance cheque');
     }
-    const total = cheque.items.reduce((sum, item) => sum + Number(item.unitPrice) * item.quantity, 0);
+    const calculation = await this.calculations.calculate(cheque.id, restaurantId);
+    const total = calculation.total;
     const lastOrder = await this.prisma.order.findFirst({ where: { chequeId: cheque.id }, orderBy: { sequenceInCheque: 'desc' }, select: { sequenceInCheque: true } });
     const lastOrderId = lastOrder ? this.orderId(cheque.sequenceNumber, lastOrder.sequenceInCheque) : null;
     await this.prisma.$transaction(async (transaction) => {
@@ -188,7 +208,8 @@ export class TablesService {
     if (cheque.advanceVersion !== cheque.version || cheque.items.some((item) => item.status === 'UNORDERED')) {
       throw new BadRequestException('A current advance cheque is required before closing');
     }
-    const total = cheque.items.reduce((sum, item) => sum + Number(item.unitPrice) * item.quantity, 0);
+    const calculation = await this.calculations.calculate(cheque.id, restaurantId);
+    const total = calculation.total;
     const receivedAmount = dto.method === 'CASH' ? dto.receivedAmount ?? 0 : total;
     if (dto.method === 'CASH' && receivedAmount < total) throw new BadRequestException('Cash received must cover the cheque total');
     if ((dto.method === 'CARD' || dto.method === 'TRANSFER') && !dto.bankName) throw new BadRequestException('A bank must be selected');
@@ -235,7 +256,8 @@ export class TablesService {
     ]);
     const items = cheque.items.map((item) => ({ id: item.id, dishId: item.dishId, name: item.dish.translations[0]?.name ?? item.dishName, quantity: item.quantity, unitPrice: Number(item.unitPrice), status: item.status, orderNumber: item.order?.sequenceNumber ?? null, orderId: item.order ? this.orderId(cheque.sequenceNumber, item.order.sequenceInCheque) : null, orderCreatedAt: item.order?.createdAt.toISOString() ?? null }));
     const hasUnorderedItems = items.some((item) => item.status === 'UNORDERED');
-    const total = items.reduce((sum, item) => sum + item.quantity * item.unitPrice, 0);
+    const calculation = await this.calculations.calculate(cheque.id, restaurantId);
+    const total = calculation.total;
     const advanceMatchesCurrentVersion = cheque.advanceVersion === cheque.version;
     return {
       table: { id: table.id, name: table.name, hallName: table.hall.name, guestCount: cheque.guestCount },
@@ -245,6 +267,10 @@ export class TablesService {
         status: cheque.status,
         items,
         total,
+        subtotal: calculation.subtotal,
+        serviceFee: calculation.serviceFee,
+        serviceFeePercent: calculation.serviceFeePercent,
+        discount: calculation.discount,
         canPrintAdvance: items.length > 0 && !hasUnorderedItems,
         canClose: items.length > 0 && !hasUnorderedItems && cheque.status === 'READY_TO_CLOSE' && advanceMatchesCurrentVersion,
       },

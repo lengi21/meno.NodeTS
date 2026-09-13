@@ -9,6 +9,7 @@ import { UpdateItemDto } from './dto/update-item.dto.js';
 import { OpenChequeDto } from './dto/open-cheque.dto.js';
 import { ModifyOrderedItemDto } from './dto/modify-ordered-item.dto.js';
 import { UpdateGuestCountDto } from './dto/update-guest-count.dto.js';
+import { SetDiscountDto } from './dto/set-discount.dto.js';
 import { TablesService } from './tables.service.js';
 
 @Controller('tables')
@@ -44,6 +45,12 @@ export class TablesController {
   updateGuests(@Param('tableId') tableId: string, @Query('language') language: string | undefined, @Body() dto: UpdateGuestCountDto, @Req() request: Request & AuthenticatedRequest) {
     const auth = this.user(request);
     return this.tables.updateGuestCount(tableId, auth.restaurantId, dto.guestCount, this.language(language));
+  }
+
+  @Patch(':tableId/active/discount')
+  discount(@Param('tableId') tableId: string, @Query('language') language: string | undefined, @Body() dto: SetDiscountDto, @Req() request: Request & AuthenticatedRequest) {
+    const auth = this.user(request);
+    return this.tables.setDiscount(tableId, auth.restaurantId, auth.memberId!, dto, this.language(language));
   }
 
   @Patch(':tableId/active/items/:itemId/ordered')
