@@ -18,10 +18,26 @@ enum RestaurantStatus {
   SUSPENDED
 }
 
+enum AdminUserStatus {
+  ACTIVE
+  DELETED
+}
+
 enum AvailabilityStatus {
   AVAILABLE
   PAUSED
   HIDDEN
+}
+
+enum MenuStatus {
+  ACTIVE
+  PAUSED
+  DELETED
+}
+
+enum MenuPurpose {
+  POS
+  QR
 }
 
 enum BusinessDayStatus {
@@ -96,6 +112,9 @@ model Restaurant {
   orders      Order[]
   printers    Printer[]
   auditEvents AuditEvent[]
+  adminUsers  AdminUser[]
+  adminAuditEvents AdminAuditEvent[]
+  menus       Menu[]
 }
 
 model RestaurantTranslation {
@@ -149,16 +168,21 @@ model Permission {
   description String
   roleLinks   RolePermission[]
   memberLinks MemberPermission[]
+  adminUserLinks AdminUserPermission[]
 }
 
 model Role {
   id           String           @id @default(cuid())
   restaurantId String
   name         String
+  description  String?
   isOwnerRole  Boolean          @default(false)
+  isActive     Boolean          @default(true)
+  deletedAt    DateTime?
   restaurant   Restaurant       @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
   permissions  RolePermission[]
   members      MemberRole[]
+  adminUsers   AdminUserRole[]
 
   @@unique([restaurantId, name])
 }
@@ -213,6 +237,62 @@ model MemberPermission {
   @@id([memberId, permissionId])
 }
 
+model AdminUser {
+  id           String          @id @default(cuid())
+  restaurantId String
+  firstName    String
+  lastName     String
+  email        String
+  passwordHash String
+  status       AdminUserStatus @default(ACTIVE)
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+  deletedAt    DateTime?
+  restaurant   Restaurant      @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  roles        AdminUserRole[]
+  permissions  AdminUserPermission[]
+  auditEvents  AdminAuditEvent[]
+
+  @@unique([restaurantId, email])
+  @@index([restaurantId, status])
+}
+
+model AdminUserRole {
+  adminUserId String
+  roleId      String
+  adminUser   AdminUser @relation(fields: [adminUserId], references: [id], onDelete: Cascade)
+  role        Role      @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@id([adminUserId, roleId])
+}
+
+model AdminUserPermission {
+  adminUserId  String
+  permissionId String
+  isGranted    Boolean    @default(true)
+  adminUser    AdminUser  @relation(fields: [adminUserId], references: [id], onDelete: Cascade)
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([adminUserId, permissionId])
+}
+
+model AdminAuditEvent {
+  id          String     @id @default(cuid())
+  restaurantId String
+  adminUserId String?
+  action      String
+  entityType  String
+  entityId    String
+  actorIp     String?
+  metadata    Json?
+  createdAt   DateTime   @default(now())
+  restaurant  Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  adminUser   AdminUser? @relation(fields: [adminUserId], references: [id], onDelete: SetNull)
+
+  @@index([restaurantId, createdAt])
+  @@index([entityType, entityId])
+}
+
 model Hall {
   id           String     @id @default(cuid())
   restaurantId String
@@ -244,10 +324,12 @@ model Category {
   restaurantId String
   imageUrl     String?
   status       AvailabilityStatus @default(AVAILABLE)
+  deletedAt    DateTime?
   sortOrder    Int
   restaurant   Restaurant         @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
   translations CategoryTranslation[]
   dishes       Dish[]
+  menuLinks    MenuCategory[]
 
   @@index([restaurantId, sortOrder])
 }
@@ -270,13 +352,71 @@ model Dish {
   priceAmount  Decimal            @db.Decimal(12, 2)
   calories     Int?
   status       AvailabilityStatus @default(AVAILABLE)
+  deletedAt    DateTime?
   sortOrder    Int
   restaurant   Restaurant         @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
   category     Category           @relation(fields: [categoryId], references: [id], onDelete: Restrict)
   translations DishTranslation[]
   chequeItems  ChequeItem[]
+  menuLinks    MenuDish[]
 
   @@index([restaurantId, categoryId, sortOrder])
+}
+
+model Menu {
+  id           String     @id @default(cuid())
+  restaurantId String
+  status       MenuStatus @default(ACTIVE)
+  purpose      MenuPurpose @default(POS)
+  isSystem     Boolean    @default(false)
+  code         String?
+  isDefault    Boolean    @default(false)
+  deletedAt    DateTime?
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  translations MenuTranslation[]
+  categories   MenuCategory[]
+  dishes       MenuDish[]
+
+  @@index([restaurantId, status])
+  @@unique([restaurantId, code])
+}
+
+model MenuTranslation {
+  id           String       @id @default(cuid())
+  menuId       String
+  languageCode LanguageCode
+  name         String
+  description  String?
+  menu         Menu         @relation(fields: [menuId], references: [id], onDelete: Cascade)
+
+  @@unique([menuId, languageCode])
+}
+
+model MenuCategory {
+  menuId       String             
+  categoryId   String
+  sortOrder    Int
+  status       AvailabilityStatus @default(AVAILABLE)
+  menu         Menu               @relation(fields: [menuId], references: [id], onDelete: Cascade)
+  category     Category           @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+
+  @@id([menuId, categoryId])
+  @@index([menuId, sortOrder])
+}
+
+model MenuDish {
+  menuId        String             
+  dishId        String
+  sortOrder     Int
+  status        AvailabilityStatus @default(AVAILABLE)
+  priceOverride Decimal?           @db.Decimal(12, 2)
+  menu          Menu               @relation(fields: [menuId], references: [id], onDelete: Cascade)
+  dish          Dish               @relation(fields: [dishId], references: [id], onDelete: Restrict)
+
+  @@id([menuId, dishId])
+  @@index([menuId, sortOrder])
 }
 
 model DishTranslation {
