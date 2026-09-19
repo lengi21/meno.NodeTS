@@ -1,0 +1,52 @@
+name: meno-pos
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: meno-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: meno_pos
+      POSTGRES_USER: meno
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - meno-postgres:/var/lib/postgresql/data
+    networks: [meno]
+
+  api:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on: [postgres]
+    environment:
+      NODE_ENV: production
+      PORT: 3001
+      DATABASE_URL: postgresql://meno:${POSTGRES_PASSWORD}@meno-postgres:5432/meno_pos?schema=public
+      APP_ORIGIN: https://meno.pandahouse2025.ge
+      JWT_SECRET: ${JWT_SECRET}
+    env_file:
+      - .env.production
+    ports:
+      - '127.0.0.1:3101:3001'
+    networks: [meno]
+    command: sh -c "pnpm exec prisma migrate deploy && node dist/main.js"
+
+  web:
+    build:
+      context: ../../panda-house-pos
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on: [api]
+    ports:
+      - '127.0.0.1:8180:80'
+    networks: [meno]
+
+volumes:
+  meno-postgres:
+
+networks:
+  meno:
+    name: meno
+
+
