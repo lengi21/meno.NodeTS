@@ -172,7 +172,10 @@ export class TablesService {
     if (!cheque.items.length || cheque.items.some((item) => item.status === 'UNORDERED')) {
       throw new BadRequestException('All cheque items must be ordered before printing an advance cheque');
     }
-    const calculation = await this.calculations.calculate(cheque.id, restaurantId);
+    const [calculation, restaurant] = await Promise.all([
+      this.calculations.calculate(cheque.id, restaurantId),
+      this.prisma.restaurant.findFirst({ where: { id: restaurantId }, include: { translations: { where: { languageCode: language }, take: 1 } } }),
+    ]);
     const total = calculation.total;
     const lastOrder = await this.prisma.order.findFirst({ where: { chequeId: cheque.id }, orderBy: { sequenceInCheque: 'desc' }, select: { sequenceInCheque: true } });
     const lastOrderId = lastOrder ? this.orderId(cheque.sequenceNumber, lastOrder.sequenceInCheque) : null;
@@ -187,6 +190,8 @@ export class TablesService {
             chequeNumber: cheque.sequenceNumber,
             chequeVersion: cheque.version,
             lastOrderId,
+            restaurantName: restaurant?.translations[0]?.name ?? restaurant?.slug ?? 'Meno POS',
+            hallName: table.hall.name,
             tableName: table.name,
             language,
             items: cheque.items.map((item) => ({ name: item.dish.translations[0]?.name ?? item.dishName, quantity: item.quantity, unitPrice: Number(item.unitPrice) })),
