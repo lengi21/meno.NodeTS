@@ -215,11 +215,23 @@ export class TablesService {
     if ((dto.method === 'CARD' || dto.method === 'TRANSFER') && !dto.bankName) throw new BadRequestException('A bank must be selected');
     if (dto.method === 'TRANSFER' && !dto.iban) throw new BadRequestException('An IBAN is required for transfers');
     const changeAmount = dto.method === 'CASH' ? receivedAmount - total : 0;
+    const discountPercent = calculation.subtotal + calculation.serviceFee > 0
+      ? Number((calculation.discount / (calculation.subtotal + calculation.serviceFee) * 100).toFixed(2))
+      : 0;
     await this.prisma.$transaction(async (transaction) => {
       await transaction.payment.create({
         data: { chequeId: cheque.id, method: dto.method, amount: total, receivedAmount: dto.method === 'CASH' ? receivedAmount : null, changeAmount, bankName: dto.bankName, iban: dto.iban },
       });
-      await transaction.cheque.update({ where: { id: cheque.id }, data: { status: 'CLOSED', closedByMemberId: memberId, closedAt: new Date() } });
+      await transaction.cheque.update({
+        where: { id: cheque.id },
+        data: {
+          status: 'CLOSED', closedByMemberId: memberId, closedAt: new Date(),
+          subtotalAmount: calculation.subtotal, serviceFeeAmount: calculation.serviceFee,
+          serviceFeePercent: calculation.serviceFeePercent, discountAmount: calculation.discount,
+          discountPercent, totalAmount: total,
+          clientPaidAmount: receivedAmount,
+        },
+      });
       if (dto.printReceipt) {
         await this.queuePrintJobs(transaction, restaurantId, 'CLOSE_CHEQUE', {
           chequeId: cheque.id,
