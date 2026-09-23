@@ -263,7 +263,7 @@ export class TablesService {
   }
 
   private async view(chequeId: string, restaurantId: string, table: { id: string; name: string; hall: { id: string; name: string; menuId: string | null } }, language: LanguageCode) {
-    const [cheque, menu] = await Promise.all([
+    const [cheque, menu, settings] = await Promise.all([
       this.prisma.cheque.findFirstOrThrow({ where: { id: chequeId, restaurantId }, include: { items: { orderBy: { createdAt: 'desc' }, include: { order: { select: { sequenceNumber: true, sequenceInCheque: true, createdAt: true } }, dish: { include: { translations: { where: { languageCode: language }, take: 1 } } } } } } }),
       this.prisma.menu.findFirst({
         where: table.hall.menuId ? { id: table.hall.menuId, restaurantId, status: 'ACTIVE', purpose: 'POS' } : { restaurantId, isDefault: true, status: 'ACTIVE', purpose: 'POS' },
@@ -286,6 +286,7 @@ export class TablesService {
           },
         },
       }),
+      this.prisma.restaurantPosSettings.findUnique({ where: { restaurantId }, select: { paymentBanks: true } }),
     ]);
     const items = cheque.items.map((item) => ({ id: item.id, dishId: item.dishId, name: item.dish.translations[0]?.name ?? item.dishName, quantity: item.quantity, unitPrice: Number(item.unitPrice), status: item.status, orderNumber: item.order?.sequenceNumber ?? null, orderId: item.order ? this.orderId(cheque.sequenceNumber, item.order.sequenceInCheque) : null, orderCreatedAt: item.order?.createdAt.toISOString() ?? null }));
     const hasUnorderedItems = items.some((item) => item.status === 'UNORDERED');
@@ -308,6 +309,7 @@ export class TablesService {
         canClose: items.length > 0 && !hasUnorderedItems && cheque.status === 'READY_TO_CLOSE' && advanceMatchesCurrentVersion,
       },
       categories: (menu?.categories ?? []).map(({ category }) => ({ id: category.id, name: category.translations[0]?.name ?? category.id, status: category.status, dishes: category.dishes.filter((dish) => { const link = dish.menuLinks.find((item) => item.menuId === menu?.id); return Boolean(link); }).map((dish) => { const link = dish.menuLinks.find((item) => item.menuId === menu?.id); return { id: dish.id, name: dish.translations[0]?.name ?? dish.id, description: dish.translations[0]?.description ?? '', price: Number(link?.priceOverride ?? dish.priceAmount), status: link?.status === 'PAUSED' || dish.status === 'PAUSED' ? 'PAUSED' : dish.status, imageUrl: dish.imageUrl }; }) })),
+      paymentBanks: Array.isArray(settings?.paymentBanks) ? settings.paymentBanks : [],
     };
   }
 

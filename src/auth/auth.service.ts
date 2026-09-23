@@ -16,7 +16,7 @@ export class AuthService {
   async signInRestaurant(dto: RestaurantSignInDto) {
     const credential = await this.prisma.restaurantCredential.findFirst({
       where: { email: dto.email.trim().toLowerCase() },
-      include: { restaurant: { include: { translations: { where: { languageCode: 'ka' }, take: 1 } } } },
+      include: { restaurant: { include: { translations: { where: { languageCode: 'ka' }, take: 1 }, settings: { select: { defaultLanguage: true } } } } },
     });
 
     if (!credential || credential.restaurant.status !== 'ACTIVE') {
@@ -50,7 +50,7 @@ export class AuthService {
 
     return {
       accessToken: await this.jwt.signAsync(claims),
-      restaurant: { id: credential.restaurant.id, slug: credential.restaurant.slug, name: credential.restaurant.translations[0]?.name ?? credential.restaurant.slug },
+      restaurant: { id: credential.restaurant.id, slug: credential.restaurant.slug, name: credential.restaurant.translations[0]?.name ?? credential.restaurant.slug, defaultLanguage: credential.restaurant.settings?.defaultLanguage ?? 'ka' },
       device: { id: device.id, name: device.displayName },
     };
   }
