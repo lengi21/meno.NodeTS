@@ -262,13 +262,29 @@ export class TablesService {
     return this.prisma.cheque.update({ where: { id: chequeId }, data: { version: { increment: 1 }, status: 'OPEN' } });
   }
 
-  private async view(chequeId: string, restaurantId: string, table: { id: string; name: string; hall: { id: string; name: string } }, language: LanguageCode) {
-    const [cheque, categories] = await Promise.all([
+  private async view(chequeId: string, restaurantId: string, table: { id: string; name: string; hall: { id: string; name: string; menuId: string | null } }, language: LanguageCode) {
+    const [cheque, menu] = await Promise.all([
       this.prisma.cheque.findFirstOrThrow({ where: { id: chequeId, restaurantId }, include: { items: { orderBy: { createdAt: 'desc' }, include: { order: { select: { sequenceNumber: true, sequenceInCheque: true, createdAt: true } }, dish: { include: { translations: { where: { languageCode: language }, take: 1 } } } } } } }),
-      this.prisma.category.findMany({
-        where: { restaurantId, status: { not: 'HIDDEN' } },
-        orderBy: { sortOrder: 'asc' },
-        include: { translations: { where: { languageCode: language }, take: 1 }, dishes: { where: { status: { not: 'HIDDEN' } }, orderBy: { sortOrder: 'asc' }, include: { translations: { where: { languageCode: language }, take: 1 } } } },
+      this.prisma.menu.findFirst({
+        where: table.hall.menuId ? { id: table.hall.menuId, restaurantId, status: 'ACTIVE', purpose: 'POS' } : { restaurantId, isDefault: true, status: 'ACTIVE', purpose: 'POS' },
+        include: {
+          categories: {
+            where: { status: 'AVAILABLE', category: { deletedAt: null, status: { not: 'HIDDEN' } } },
+            orderBy: { sortOrder: 'asc' },
+            include: {
+              category: {
+                include: {
+                  translations: { where: { languageCode: language }, take: 1 },
+                  dishes: {
+                    where: { deletedAt: null, status: { not: 'HIDDEN' } },
+                    orderBy: { sortOrder: 'asc' },
+                    include: { translations: { where: { languageCode: language }, take: 1 }, menuLinks: true },
+                  },
+                },
+              },
+            },
+          },
+        },
       }),
     ]);
     const items = cheque.items.map((item) => ({ id: item.id, dishId: item.dishId, name: item.dish.translations[0]?.name ?? item.dishName, quantity: item.quantity, unitPrice: Number(item.unitPrice), status: item.status, orderNumber: item.order?.sequenceNumber ?? null, orderId: item.order ? this.orderId(cheque.sequenceNumber, item.order.sequenceInCheque) : null, orderCreatedAt: item.order?.createdAt.toISOString() ?? null }));
@@ -291,7 +307,7 @@ export class TablesService {
         canPrintAdvance: items.length > 0 && !hasUnorderedItems,
         canClose: items.length > 0 && !hasUnorderedItems && cheque.status === 'READY_TO_CLOSE' && advanceMatchesCurrentVersion,
       },
-      categories: categories.map((category) => ({ id: category.id, name: category.translations[0]?.name ?? category.id, status: category.status, dishes: category.dishes.map((dish) => ({ id: dish.id, name: dish.translations[0]?.name ?? dish.id, description: dish.translations[0]?.description ?? '', price: Number(dish.priceAmount), status: dish.status, imageUrl: dish.imageUrl })) })),
+      categories: (menu?.categories ?? []).map(({ category }) => ({ id: category.id, name: category.translations[0]?.name ?? category.id, status: category.status, dishes: category.dishes.filter((dish) => { const link = dish.menuLinks.find((item) => item.menuId === menu?.id); return Boolean(link); }).map((dish) => { const link = dish.menuLinks.find((item) => item.menuId === menu?.id); return { id: dish.id, name: dish.translations[0]?.name ?? dish.id, description: dish.translations[0]?.description ?? '', price: Number(link?.priceOverride ?? dish.priceAmount), status: link?.status === 'PAUSED' || dish.status === 'PAUSED' ? 'PAUSED' : dish.status, imageUrl: dish.imageUrl }; }) })),
     };
   }
 

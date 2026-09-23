@@ -8,11 +8,11 @@ export class HallsService {
 
   async listForRestaurant(restaurantId: string) {
     const halls = await this.prisma.hall.findMany({
-      where: { restaurantId, isActive: true },
+      where: { restaurantId, isActive: true, deletedAt: null },
       orderBy: { sortOrder: 'asc' },
       include: {
         tables: {
-          where: { isActive: true },
+          where: { isActive: true, deletedAt: null },
           orderBy: { sortOrder: 'asc' },
           include: {
             cheques: {
