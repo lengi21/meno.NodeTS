@@ -1,6 +1,7 @@
 import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcryptjs';
+import * as argon2 from 'argon2';
 import { PrismaService } from '../prisma/prisma.service.js';
 import type { AuthClaims } from './auth.types.js';
 import type { RestaurantSignInDto } from './dto/restaurant-sign-in.dto.js';
@@ -71,7 +72,9 @@ export class AuthService {
     const member = (await Promise.all(
       members.map(async (candidate) => ({
         candidate,
-        matches: await bcrypt.compare(pin, candidate.pinHash),
+        matches: candidate.pinHash.startsWith('$argon2')
+          ? await argon2.verify(candidate.pinHash, pin)
+          : await bcrypt.compare(pin, candidate.pinHash),
       })),
     )).find((result) => result.matches)?.candidate;
 
